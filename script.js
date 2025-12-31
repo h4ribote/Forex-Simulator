@@ -238,6 +238,11 @@ const App = {
 
         this.renderChart();
         this.updateUI();
+
+        if (!isInit && this.isPlaying) {
+            this.pause();
+            this.play();
+        }
     },
 
     aggregateData(minutes) {
@@ -302,9 +307,10 @@ const App = {
         this.isPlaying = true;
         this.elements.btnPlay.textContent = '⏸';
 
+        const interval = this.speed * this.timeframe;
         this.timer = setInterval(() => {
             this.nextCandle();
-        }, this.speed);
+        }, interval);
     },
 
     pause() {
