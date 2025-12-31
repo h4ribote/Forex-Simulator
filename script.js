@@ -19,28 +19,22 @@ const App = {
     timer: null,
 
     // Chart Config
-    visibleCandles: 60,
-    candleWidth: 0,
-    canvas: null,
-    ctx: null,
-    height: 0,
-    width: 0,
+    chart: null,
+    candleSeries: null,
 
     elements: {},
 
     init() {
         this.cacheElements();
         this.setupEventListeners();
-        this.resizeCanvas();
-        window.addEventListener('resize', () => this.resizeCanvas());
-        this.renderLoop(); // Start render loop
+        this.initChart();
+        this.renderLoop(); // Start render loop (mostly for UI updates if needed)
     },
 
     cacheElements() {
         this.elements = {
             fileInput: document.getElementById('fileInput'),
             loader: document.getElementById('loader'),
-            canvas: document.getElementById('mainCanvas'),
             chartContainer: document.getElementById('chartContainer'),
             balance: document.getElementById('balanceDisplay'),
             equity: document.getElementById('equityDisplay'),
@@ -59,8 +53,47 @@ const App = {
             lotInput: document.getElementById('lotSize'),
             btnReset: document.getElementById('btnReset')
         };
-        this.canvas = this.elements.canvas;
-        this.ctx = this.canvas.getContext('2d');
+    },
+
+    initChart() {
+        const chartOptions = {
+            layout: {
+                background: { type: 'solid', color: '#1e293b' },
+                textColor: '#94a3b8',
+            },
+            grid: {
+                vertLines: { color: '#334155' },
+                horzLines: { color: '#334155' },
+            },
+            timeScale: {
+                borderColor: '#475569',
+                timeVisible: true,
+                secondsVisible: false,
+            },
+            rightPriceScale: {
+                borderColor: '#475569',
+            },
+            width: this.elements.chartContainer.clientWidth,
+            height: this.elements.chartContainer.clientHeight,
+        };
+
+        this.chart = LightweightCharts.createChart(this.elements.chartContainer, chartOptions);
+
+        this.candleSeries = this.chart.addCandlestickSeries({
+            upColor: '#22c55e',
+            downColor: '#ef4444',
+            borderVisible: false,
+            wickUpColor: '#22c55e',
+            wickDownColor: '#ef4444',
+        });
+
+        // Handle Resize
+        const resizeObserver = new ResizeObserver(entries => {
+            if (entries.length === 0 || entries[0].target !== this.elements.chartContainer) return;
+            const newRect = entries[0].contentRect;
+            this.chart.applyOptions({ width: newRect.width, height: newRect.height });
+        });
+        resizeObserver.observe(this.elements.chartContainer);
     },
 
     setupEventListeners() {
@@ -93,40 +126,6 @@ const App = {
                 this.resetSim();
             }
         });
-
-        // Simple touch/drag for chart scrolling (optional basic implementation)
-        let isDragging = false;
-        let lastX = 0;
-
-        this.elements.chartContainer.addEventListener('mousedown', e => {
-            isDragging = true;
-            lastX = e.clientX;
-        });
-        window.addEventListener('mouseup', () => isDragging = false);
-        this.elements.chartContainer.addEventListener('mousemove', e => {
-            if (!isDragging || !this.data.length) return;
-            const dx = e.clientX - lastX;
-            if (Math.abs(dx) > 5) {
-                // Determine direction
-                // For simplicity in this version, dragging logic is minimal
-                // Ideally, modify a 'scrollOffset' variable
-                lastX = e.clientX;
-            }
-        });
-    },
-
-    resizeCanvas() {
-        const rect = this.elements.chartContainer.getBoundingClientRect();
-        this.width = rect.width;
-        this.height = rect.height;
-
-        // Handle High DPI
-        const dpr = window.devicePixelRatio || 1;
-        this.canvas.width = this.width * dpr;
-        this.canvas.height = this.height * dpr;
-        this.ctx.scale(dpr, dpr);
-
-        this.renderChart();
     },
 
     resetSim() {
@@ -224,15 +223,8 @@ const App = {
         // Ensure display cursor is at the end
         this.currentIndex = this.data.length - 1;
 
-        this.renderChart();
+        this.updateChartData();
         this.updateUI();
-
-        if (!isInit && this.isPlaying) {
-            // No need to restart playback logic if interval is just speed
-            // But if we were relying on timeframe for interval, we would.
-            // Since play() now uses simple speed, we might not strictly need to restart,
-            // but it's safe to keep UI consistent.
-        }
     },
 
     aggregateData(minutes, upToIndex) {
@@ -297,10 +289,15 @@ const App = {
         this.isPlaying = true;
         this.elements.btnPlay.textContent = '⏸';
 
-        const interval = this.speed * this.timeframe;
+        const interval = this.speed * this.timeframe; // Adjust timing based on speed
+        // NOTE: If speed is "ms per candle update", we should just use speed directly.
+        // The original code used speed * timeframe which implies higher timeframe = slower updates?
+        // Let's stick to simple speed for now.
+        // Actually, if we want to simulate "1 tick per X ms", we should just call nextCandle.
+
         this.timer = setInterval(() => {
             this.nextCandle();
-        }, interval);
+        }, this.speed); // Using raw speed value for interval
     },
 
     pause() {
@@ -345,7 +342,18 @@ const App = {
         // Ensure chart shows latest
         this.currentIndex = this.data.length - 1;
 
-        this.renderChart();
+        // Update Chart via API
+        const currentCandle = this.data[this.data.length - 1];
+        // Convert to seconds for TradingView
+        const tvCandle = {
+            ...currentCandle,
+            time: currentCandle.time / 1000
+        };
+        this.candleSeries.update(tvCandle);
+
+        // Keep latest in view if playing
+        // this.chart.timeScale().scrollToPosition(0, false); // Optional: keep rightmost visible
+
         this.updateUI();
     },
 
@@ -479,105 +487,25 @@ const App = {
 
     // --- Chart Rendering ---
 
-    renderChart() {
-        if (!this.data.length || !this.ctx) return;
+    updateChartData() {
+        if (!this.candleSeries) return;
 
-        const ctx = this.ctx;
-        const w = this.width;
-        const h = this.height;
+        // Map data to TradingView format (time in seconds)
+        const tvData = this.data.map(d => ({
+            time: d.time / 1000,
+            open: d.open,
+            high: d.high,
+            low: d.low,
+            close: d.close
+        }));
 
-        // Clear
-        ctx.clearRect(0, 0, w, h);
-
-        // Determine view window
-        const endIndex = this.currentIndex;
-        const startIndex = Math.max(0, endIndex - this.visibleCandles);
-        const viewData = this.data.slice(startIndex, endIndex + 1);
-
-        if (viewData.length === 0) return;
-
-        // Find Y Scale
-        let minPrice = Infinity;
-        let maxPrice = -Infinity;
-        viewData.forEach(d => {
-            if (d.high > maxPrice) maxPrice = d.high;
-            if (d.low < minPrice) minPrice = d.low;
-        });
-
-        // Add padding to Y axis
-        const priceRange = maxPrice - minPrice;
-        minPrice -= priceRange * 0.1;
-        maxPrice += priceRange * 0.1;
-
-        const getY = (price) => h - ((price - minPrice) / (maxPrice - minPrice)) * h;
-
-        // Grid Lines
-        ctx.strokeStyle = '#334155';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-
-        // Draw 5 horizontal grid lines
-        for(let i=1; i<5; i++) {
-            const p = minPrice + (priceRange * 1.2) * (i/5);
-            const y = getY(p);
-            ctx.moveTo(0, y);
-            ctx.lineTo(w, y);
-
-            // Text
-            ctx.fillStyle = '#64748b';
-            ctx.font = '10px sans-serif';
-            ctx.fillText(p.toFixed(2), w - 40, y - 5);
-        }
-        ctx.stroke();
-
-        // Draw Candles
-        const candleW = (w / this.visibleCandles) * 0.8;
-        const spacing = (w / this.visibleCandles) * 0.2;
-
-        viewData.forEach((d, i) => {
-            const x = i * (candleW + spacing) + spacing/2;
-            const openY = getY(d.open);
-            const closeY = getY(d.close);
-            const highY = getY(d.high);
-            const lowY = getY(d.low);
-
-            const isBullish = d.close >= d.open;
-
-            ctx.fillStyle = isBullish ? '#22c55e' : '#ef4444'; // Green : Red
-            ctx.strokeStyle = ctx.fillStyle;
-
-            // Wick
-            ctx.beginPath();
-            ctx.moveTo(x + candleW/2, highY);
-            ctx.lineTo(x + candleW/2, lowY);
-            ctx.stroke();
-
-            // Body
-            // Ensure height is at least 1px
-            let bodyH = Math.abs(closeY - openY);
-            if (bodyH < 1) bodyH = 1;
-
-            const topY = Math.min(openY, closeY);
-            ctx.fillRect(x, topY, candleW, bodyH);
-        });
-
-        // Draw Current Price Line
-        const currentClose = viewData[viewData.length-1].close;
-        const curY = getY(currentClose);
-
-        ctx.beginPath();
-        ctx.strokeStyle = '#ffffff';
-        ctx.setLineDash([5, 5]);
-        ctx.moveTo(0, curY);
-        ctx.lineTo(w, curY);
-        ctx.stroke();
-        ctx.setLineDash([]);
+        this.candleSeries.setData(tvData);
     },
 
     renderLoop() {
-        // Animation loop hook if needed for smoother transitions later
-        // Currently rendering is triggered by state changes
-        requestAnimationFrame(() => this.renderLoop());
+        // Kept if we need independent animation loop,
+        // but mostly event-driven now.
+        // requestAnimationFrame(() => this.renderLoop());
     }
 };
 

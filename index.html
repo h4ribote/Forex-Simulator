@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>FX Trade Simulator</title>
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {
@@ -155,7 +156,7 @@
 
     <!-- Chart Area -->
     <div class="chart-container" id="chartContainer">
-        <canvas id="mainCanvas"></canvas>
+        <!-- Canvas replaced by TradingView chart injection -->
         <div class="chart-controls">
             <button class="ctrl-btn" id="btnPlayPause">▶</button>
             <button class="ctrl-btn" id="btnStep">⏯</button>
