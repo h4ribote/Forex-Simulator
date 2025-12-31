@@ -5,7 +5,8 @@ const App = {
     rawData: [], // Original 1-minute data
     data: [], // Aggregated data for display
     timeframe: 1, // Current timeframe in minutes
-    currentIndex: 0, // Current simulation cursor
+    currentRawIndex: 0, // Current simulation cursor (index in rawData)
+    currentIndex: 0, // Current display cursor (index in data)
 
     // Trading State
     balance: 1000000,
@@ -130,11 +131,10 @@ const App = {
 
     resetSim() {
         this.pause();
-        this.currentIndex = 0;
+        this.currentRawIndex = Math.min(60, this.rawData.length - 1);
         this.balance = 1000000;
         this.positions = [];
-        this.updateUI();
-        this.renderChart();
+        this.setTimeframe(this.timeframe);
     },
 
     handleFileUpload(event) {
@@ -192,6 +192,9 @@ const App = {
         }
 
         this.rawData = newData;
+        // Start with some history
+        this.currentRawIndex = Math.min(60, this.rawData.length - 1);
+
         this.elements.loader.style.display = 'none';
 
         // Enable buttons
@@ -214,41 +217,32 @@ const App = {
     },
 
     setTimeframe(minutes, isInit = false) {
-        // Calculate current time before switch
-        let currentTime = 0;
-        if (!isInit && this.data.length > 0) {
-            currentTime = this.data[this.currentIndex].time;
-        } else if (this.rawData.length > 0) {
-            // If init, start with some history (e.g., 60 bars in)
-            // But we need data first
-        }
-
         this.timeframe = minutes;
-        this.data = this.aggregateData(minutes);
+        // Rebuild aggregated data from rawData up to currentRawIndex
+        this.data = this.aggregateData(minutes, this.currentRawIndex);
 
-        // Find new index closest to currentTime
-        if (!isInit && currentTime > 0) {
-            let newIndex = this.data.findIndex(c => c.time >= currentTime);
-            if (newIndex === -1) newIndex = this.data.length - 1;
-            this.currentIndex = newIndex;
-        } else {
-             // Start with some history
-             this.currentIndex = Math.min(60, this.data.length - 1);
-        }
+        // Ensure display cursor is at the end
+        this.currentIndex = this.data.length - 1;
 
         this.renderChart();
         this.updateUI();
 
         if (!isInit && this.isPlaying) {
-            this.pause();
-            this.play();
+            // No need to restart playback logic if interval is just speed
+            // But if we were relying on timeframe for interval, we would.
+            // Since play() now uses simple speed, we might not strictly need to restart,
+            // but it's safe to keep UI consistent.
         }
     },
 
-    aggregateData(minutes) {
+    aggregateData(minutes, upToIndex) {
+        if (!this.rawData.length) return [];
+
+        // Limit raw data to upToIndex
+        const sourceData = this.rawData.slice(0, upToIndex + 1);
+
         if (minutes === 1) {
-            // Just map to add timeStr
-            return this.rawData.map(c => ({
+            return sourceData.map(c => ({
                 ...c,
                 timeStr: this.formatTime(c.time)
             }));
@@ -257,15 +251,11 @@ const App = {
         const aggregated = [];
         const intervalMs = minutes * 60 * 1000;
 
-        if (this.rawData.length === 0) return [];
-
         let currentCandle = null;
         let bucketStartTime = 0;
 
-        for (const candle of this.rawData) {
+        for (const candle of sourceData) {
             const candleTime = candle.time;
-            // Floor to the nearest interval
-            // Note: This aligns to epoch.
             const alignedTime = Math.floor(candleTime / intervalMs) * intervalMs;
 
             if (currentCandle && alignedTime !== bucketStartTime) {
@@ -320,12 +310,41 @@ const App = {
     },
 
     nextCandle() {
-        if (this.currentIndex >= this.data.length - 1) {
+        if (this.currentRawIndex >= this.rawData.length - 1) {
             this.pause();
             alert("データ終了");
             return;
         }
-        this.currentIndex++;
+        this.currentRawIndex++;
+
+        // Update aggregated data incrementally
+        const rawCandle = this.rawData[this.currentRawIndex];
+        const intervalMs = this.timeframe * 60 * 1000;
+        const bucketTime = Math.floor(rawCandle.time / intervalMs) * intervalMs;
+
+        // Check if last aggregated candle corresponds to this bucket
+        const lastAgg = this.data.length > 0 ? this.data[this.data.length - 1] : null;
+
+        if (lastAgg && lastAgg.time === bucketTime) {
+            // Update existing candle
+            lastAgg.high = Math.max(lastAgg.high, rawCandle.high);
+            lastAgg.low = Math.min(lastAgg.low, rawCandle.low);
+            lastAgg.close = rawCandle.close;
+        } else {
+            // Start new candle
+            this.data.push({
+                time: bucketTime,
+                timeStr: this.formatTime(bucketTime),
+                open: rawCandle.open,
+                high: rawCandle.high,
+                low: rawCandle.low,
+                close: rawCandle.close
+            });
+        }
+
+        // Ensure chart shows latest
+        this.currentIndex = this.data.length - 1;
+
         this.renderChart();
         this.updateUI();
     },
@@ -333,13 +352,14 @@ const App = {
     // --- Trading Logic ---
 
     getCurrentPrice() {
-        if (!this.data.length) return { bid: 0, ask: 0 };
-        const candle = this.data[this.currentIndex];
+        // Price should be based on current RAW candle (most granular)
+        if (!this.rawData.length) return { bid: 0, ask: 0 };
+        const candle = this.rawData[this.currentRawIndex];
         // Bid = Close, Ask = Close + Spread
         return {
             bid: candle.close,
             ask: candle.close + this.spread,
-            time: candle.timeStr
+            time: this.formatTime(candle.time)
         };
     },
 
