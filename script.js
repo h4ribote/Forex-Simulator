@@ -2,7 +2,9 @@
  * Core Application Logic
  */
 const App = {
-    data: [], // Full CSV data
+    rawData: [], // Original 1-minute data
+    data: [], // Aggregated data for display
+    timeframe: 1, // Current timeframe in minutes
     currentIndex: 0, // Current simulation cursor
 
     // Trading State
@@ -51,6 +53,7 @@ const App = {
             btnSell: document.getElementById('btnSell'),
             btnPlay: document.getElementById('btnPlayPause'),
             btnStep: document.getElementById('btnStep'),
+            timeframeSelect: document.getElementById('timeframeSelect'),
             speedSelect: document.getElementById('speedSelect'),
             lotInput: document.getElementById('lotSize'),
             btnReset: document.getElementById('btnReset')
@@ -74,6 +77,11 @@ const App = {
                 this.pause();
                 this.play();
             }
+        });
+
+        this.elements.timeframeSelect.addEventListener('change', (e) => {
+            const newTimeframe = parseInt(e.target.value);
+            this.setTimeframe(newTimeframe);
         });
 
         this.elements.btnBuy.addEventListener('click', () => this.openPosition('BUY'));
@@ -175,7 +183,7 @@ const App = {
 
             newData.push({
                 time: ts,
-                timeStr: timeStr.substring(0, 16), // Show up to minutes
+                // timeStr will be generated on demand or pre-calc if needed
                 open: parseFloat(cols[1]),
                 high: parseFloat(cols[2]),
                 low: parseFloat(cols[3]),
@@ -183,20 +191,103 @@ const App = {
             });
         }
 
-        this.data = newData;
-        this.currentIndex = Math.min(60, this.data.length - 1); // Start with some history
-
+        this.rawData = newData;
         this.elements.loader.style.display = 'none';
 
         // Enable buttons
         this.elements.btnBuy.classList.remove('btn-disabled');
         this.elements.btnSell.classList.remove('btn-disabled');
 
+        // Set initial timeframe
+        this.setTimeframe(this.timeframe, true);
+    },
+
+    formatTime(ts) {
+        const d = new Date(ts);
+        const pad = (n) => n.toString().padStart(2, '0');
+        const year = d.getFullYear();
+        const month = pad(d.getMonth() + 1);
+        const day = pad(d.getDate());
+        const hour = pad(d.getHours());
+        const min = pad(d.getMinutes());
+        return `${year}/${month}/${day} ${hour}:${min}`;
+    },
+
+    setTimeframe(minutes, isInit = false) {
+        // Calculate current time before switch
+        let currentTime = 0;
+        if (!isInit && this.data.length > 0) {
+            currentTime = this.data[this.currentIndex].time;
+        } else if (this.rawData.length > 0) {
+            // If init, start with some history (e.g., 60 bars in)
+            // But we need data first
+        }
+
+        this.timeframe = minutes;
+        this.data = this.aggregateData(minutes);
+
+        // Find new index closest to currentTime
+        if (!isInit && currentTime > 0) {
+            let newIndex = this.data.findIndex(c => c.time >= currentTime);
+            if (newIndex === -1) newIndex = this.data.length - 1;
+            this.currentIndex = newIndex;
+        } else {
+             // Start with some history
+             this.currentIndex = Math.min(60, this.data.length - 1);
+        }
+
         this.renderChart();
         this.updateUI();
+    },
 
-        // Auto play start
-        // this.play();
+    aggregateData(minutes) {
+        if (minutes === 1) {
+            // Just map to add timeStr
+            return this.rawData.map(c => ({
+                ...c,
+                timeStr: this.formatTime(c.time)
+            }));
+        }
+
+        const aggregated = [];
+        const intervalMs = minutes * 60 * 1000;
+
+        if (this.rawData.length === 0) return [];
+
+        let currentCandle = null;
+        let bucketStartTime = 0;
+
+        for (const candle of this.rawData) {
+            const candleTime = candle.time;
+            // Floor to the nearest interval
+            // Note: This aligns to epoch.
+            const alignedTime = Math.floor(candleTime / intervalMs) * intervalMs;
+
+            if (currentCandle && alignedTime !== bucketStartTime) {
+                aggregated.push(currentCandle);
+                currentCandle = null;
+            }
+
+            if (!currentCandle) {
+                bucketStartTime = alignedTime;
+                currentCandle = {
+                    time: bucketStartTime,
+                    timeStr: this.formatTime(bucketStartTime),
+                    open: candle.open,
+                    high: candle.high,
+                    low: candle.low,
+                    close: candle.close,
+                };
+            } else {
+                currentCandle.high = Math.max(currentCandle.high, candle.high);
+                currentCandle.low = Math.min(currentCandle.low, candle.low);
+                currentCandle.close = candle.close;
+            }
+        }
+        if (currentCandle) {
+            aggregated.push(currentCandle);
+        }
+        return aggregated;
     },
 
     // --- Simulation Logic ---
