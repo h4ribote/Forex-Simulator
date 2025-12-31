@@ -269,8 +269,8 @@ const App = {
             equity: document.getElementById('equityDisplay'),
             date: document.getElementById('currentDateDisplay'),
             price: document.getElementById('currentPriceDisplay'),
-            bid: document.getElementById('bidDisplay'),
-            ask: document.getElementById('askDisplay'),
+            bidDisplay: document.getElementById('bidDisplay'),
+            askDisplay: document.getElementById('askDisplay'),
             pnl: document.getElementById('totalPnlDisplay'),
             positions: document.getElementById('positionList'),
             btnBuy: document.getElementById('btnBuy'),
@@ -527,8 +527,9 @@ const App = {
         // Update Header
         this.elements.date.textContent = prices.time;
         this.elements.price.textContent = prices.bid.toFixed(3);
-        this.elements.bidDisplay.textContent = prices.bid.toFixed(3);
-        this.elements.askDisplay.textContent = prices.ask.toFixed(3);
+        
+        if (this.elements.bidDisplay) this.elements.bidDisplay.textContent = prices.bid.toFixed(3);
+        if (this.elements.askDisplay) this.elements.askDisplay.textContent = prices.ask.toFixed(3);
 
         // Calc Unrealized PnL
         let totalUnrealizedPnl = 0;
