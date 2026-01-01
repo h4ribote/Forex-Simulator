@@ -24,6 +24,9 @@ const App = {
 
     elements: {},
 
+    // Analysis State
+    isAnalysisOpen: false,
+
     init() {
         this.cacheElements();
         this.setupEventListeners();
@@ -51,7 +54,11 @@ const App = {
             timeframeSelect: document.getElementById('timeframeSelect'),
             speedSelect: document.getElementById('speedSelect'),
             lotInput: document.getElementById('lotSize'),
-            btnReset: document.getElementById('btnReset')
+            btnReset: document.getElementById('btnReset'),
+            btnAnalysis: document.getElementById('btnAnalysis'),
+            analysisModal: document.getElementById('analysisModal'),
+            btnCloseAnalysis: document.getElementById('btnCloseAnalysis'),
+            analysisContent: document.getElementById('analysisContent')
         };
     },
 
@@ -79,7 +86,7 @@ const App = {
 
         this.chart = LightweightCharts.createChart(this.elements.chartContainer, chartOptions);
 
-        this.candleSeries = this.chart.addCandlestickSeries({
+        this.candleSeries = this.chart.addSeries(LightweightCharts.CandlestickSeries, {
             upColor: '#22c55e',
             downColor: '#ef4444',
             borderVisible: false,
@@ -126,6 +133,96 @@ const App = {
                 this.resetSim();
             }
         });
+
+        this.elements.btnAnalysis.addEventListener('click', () => this.toggleAnalysis());
+        this.elements.btnCloseAnalysis.addEventListener('click', () => this.toggleAnalysis());
+    },
+
+    toggleAnalysis() {
+        this.isAnalysisOpen = !this.isAnalysisOpen;
+        if (this.isAnalysisOpen) {
+            this.elements.analysisModal.classList.remove('hidden');
+            this.renderAnalysis();
+        } else {
+            this.elements.analysisModal.classList.add('hidden');
+        }
+    },
+
+    renderAnalysis() {
+        if (!this.isAnalysisOpen || !this.data.length) return;
+
+        const analysis = TechnicalIndicators.analyze(this.data);
+        if (!analysis) return;
+
+        const getSignalColor = (action) => action === 'BUY' ? 'text-blue-400' : action === 'SELL' ? 'text-red-400' : 'text-slate-400';
+        const getSignalText = (action) => action === 'BUY' ? '買い' : action === 'SELL' ? '売り' : '中立';
+
+        // Helper for gauge (simplified)
+        const renderGauge = (title, data) => {
+            let buy = 0, sell = 0, neutral = 0;
+            data.forEach(d => {
+                if (d.action === 'BUY') buy++;
+                else if (d.action === 'SELL') sell++;
+                else neutral++;
+            });
+
+            // Gauge CSS Logic (basic)
+            const total = buy + sell + neutral;
+            const score = (buy - sell) / total; // -1 to 1
+            const deg = (score + 1) * 90; // 0 to 180
+
+            return `
+                <div class="bg-black/20 p-4 rounded text-center">
+                    <h3 class="text-sm text-slate-300 mb-2">${title}</h3>
+                    <div class="relative w-40 h-20 mx-auto overflow-hidden">
+                        <div class="absolute w-40 h-40 rounded-full border-8 border-slate-700 top-0 left-0"></div>
+                        <div class="absolute w-40 h-40 rounded-full border-8 border-transparent border-t-blue-500 top-0 left-0" style="transform: rotate(${score * 45}deg);"></div>
+                        <div class="absolute bottom-0 left-1/2 w-1 h-20 bg-white origin-bottom transform -translate-x-1/2 rotate-[${score * 90}deg] transition-transform"></div>
+                    </div>
+                    <div class="flex justify-around mt-2 text-xs font-mono">
+                        <div class="text-red-400">売り<br><span class="text-lg">${sell}</span></div>
+                        <div class="text-slate-400">中立<br><span class="text-lg">${neutral}</span></div>
+                        <div class="text-blue-400">買い<br><span class="text-lg">${buy}</span></div>
+                    </div>
+                </div>
+            `;
+        };
+
+        const renderTable = (items) => {
+            return items.map(item => `
+                <div class="flex justify-between py-2 border-b border-slate-700 text-sm">
+                    <span class="text-slate-300">${item.name}</span>
+                    <div class="text-right">
+                        <span class="font-mono mr-2">${item.value !== null ? item.value.toFixed(2) : '-'}</span>
+                        <span class="${getSignalColor(item.action)} font-bold w-10 inline-block text-center">${getSignalText(item.action)}</span>
+                    </div>
+                </div>
+            `).join('');
+        };
+
+        const html = `
+            <div class="grid grid-cols-2 gap-4 mb-6">
+                ${renderGauge('オシレーター', analysis.oscillators)}
+                ${renderGauge('移動平均', analysis.movingAverages)}
+            </div>
+
+            <div class="space-y-6">
+                <div>
+                    <h3 class="text-sm font-bold text-slate-300 mb-2 border-b border-slate-600 pb-1">オシレーター</h3>
+                    <div class="space-y-1">
+                        ${renderTable(analysis.oscillators)}
+                    </div>
+                </div>
+                <div>
+                    <h3 class="text-sm font-bold text-slate-300 mb-2 border-b border-slate-600 pb-1">移動平均</h3>
+                    <div class="space-y-1">
+                        ${renderTable(analysis.movingAverages)}
+                    </div>
+                </div>
+            </div>
+        `;
+
+        this.elements.analysisContent.innerHTML = html;
     },
 
     resetSim() {
@@ -355,6 +452,7 @@ const App = {
         // this.chart.timeScale().scrollToPosition(0, false); // Optional: keep rightmost visible
 
         this.updateUI();
+        if (this.isAnalysisOpen) this.renderAnalysis();
     },
 
     // --- Trading Logic ---
