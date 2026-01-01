@@ -155,7 +155,7 @@ const App = {
         if (!analysis) return;
 
         const getSignalColor = (action) => action === 'BUY' ? 'text-blue-400' : action === 'SELL' ? 'text-red-400' : 'text-slate-400';
-        const getSignalText = (action) => action === 'BUY' ? '買い' : action === 'SELL' ? '売り' : '中立';
+        const getSignalText = (action) => action === 'BUY' ? '買い' : action === 'SELL' ? '売り' : action === null ? '-' : '中立';
 
         // Helper for gauge (simplified)
         const renderGauge = (title, data) => {
@@ -163,12 +163,12 @@ const App = {
             data.forEach(d => {
                 if (d.action === 'BUY') buy++;
                 else if (d.action === 'SELL') sell++;
-                else neutral++;
+                else if (d.action === 'NEUTRAL') neutral++;
             });
 
             // Gauge CSS Logic (basic)
             const total = buy + sell + neutral;
-            const score = (buy - sell) / total; // -1 to 1
+            const score = total > 0 ? (buy - sell) / total : 0; // -1 to 1
             const deg = (score + 1) * 90; // 0 to 180
 
             return `

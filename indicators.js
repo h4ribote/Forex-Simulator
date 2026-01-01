@@ -4,7 +4,8 @@
 class TechnicalIndicators {
 
     static analyze(candles) {
-        if (!candles || candles.length < 100) return null;
+        // Removed length check to allow display with hyphens
+        if (!candles) return null;
 
         const closes = candles.map(c => c.close);
         const highs = candles.map(c => c.high);
@@ -77,25 +78,25 @@ class TechnicalIndicators {
     }
 
     // --- Action Checks ---
-    static checkRsi(v) { return v < 30 ? 'BUY' : v > 70 ? 'SELL' : 'NEUTRAL'; }
-    static checkStoch(v) { return v < 20 ? 'BUY' : v > 80 ? 'SELL' : 'NEUTRAL'; }
-    static checkCci(v) { return v < -100 ? 'BUY' : v > 100 ? 'SELL' : 'NEUTRAL'; }
-    static checkAdx(v) { return (v.adx > 25 && v.pdi > v.mdi) ? 'BUY' : (v.adx > 25 && v.mdi > v.pdi) ? 'SELL' : 'NEUTRAL'; }
-    static checkZero(v) { return v > 0 ? 'BUY' : v < 0 ? 'SELL' : 'NEUTRAL'; }
-    static checkWpr(v) { return v < -80 ? 'BUY' : v > -20 ? 'SELL' : 'NEUTRAL'; }
-    static checkMa(price, ma) { return price > ma ? 'BUY' : 'SELL'; }
+    static checkRsi(v) { return v === null ? null : v < 30 ? 'BUY' : v > 70 ? 'SELL' : 'NEUTRAL'; }
+    static checkStoch(v) { return v === null ? null : v < 20 ? 'BUY' : v > 80 ? 'SELL' : 'NEUTRAL'; }
+    static checkCci(v) { return v === null ? null : v < -100 ? 'BUY' : v > 100 ? 'SELL' : 'NEUTRAL'; }
+    static checkAdx(v) { return (v.adx === null) ? null : (v.adx > 25 && v.pdi > v.mdi) ? 'BUY' : (v.adx > 25 && v.mdi > v.pdi) ? 'SELL' : 'NEUTRAL'; }
+    static checkZero(v) { return v === null ? null : v > 0 ? 'BUY' : v < 0 ? 'SELL' : 'NEUTRAL'; }
+    static checkWpr(v) { return v === null ? null : v < -80 ? 'BUY' : v > -20 ? 'SELL' : 'NEUTRAL'; }
+    static checkMa(price, ma) { return ma === null ? null : price > ma ? 'BUY' : 'SELL'; }
 
     // --- Calculations ---
 
     static sma(data, len) {
-        if (data.length < len) return 0;
+        if (data.length < len) return null;
         let sum = 0;
         for (let i = 0; i < len; i++) sum += data[data.length - 1 - i];
         return sum / len;
     }
 
     static ema(data, len) {
-        if (data.length < len) return 0;
+        if (data.length < len) return null;
         const k = 2 / (len + 1);
         let ema = data[0];
         for (let i = 1; i < data.length; i++) {
@@ -105,7 +106,7 @@ class TechnicalIndicators {
     }
 
     static rsi(data, len) {
-        if (data.length < len + 1) return 50;
+        if (data.length < len + 1) return null;
         let gains = 0, losses = 0;
         for (let i = 1; i <= len; i++) {
             const d = data[i] - data[i - 1];
@@ -129,10 +130,12 @@ class TechnicalIndicators {
     }
 
     static stoch(highs, lows, closes, period, kSmooth, dSmooth) {
-        const rawKs = [];
         const len = closes.length;
-        const needed = period + kSmooth + dSmooth + 50;
-        const start = Math.max(0, len - needed);
+        const needed = period + kSmooth + dSmooth;
+        if (len < needed) return { k: null, d: null };
+
+        const rawKs = [];
+        const start = Math.max(0, len - needed - 50);
 
         for (let i = start; i < len; i++) {
             if (i < period - 1) { rawKs.push(50); continue; }
@@ -157,7 +160,7 @@ class TechnicalIndicators {
     }
 
     static cci(highs, lows, closes, len) {
-        if (closes.length < len) return 0;
+        if (closes.length < len) return null;
         const tp = (i) => (highs[i] + lows[i] + closes[i]) / 3;
         const tps = [];
         for (let i = Math.max(0, closes.length - len * 2); i < closes.length; i++) {
@@ -176,7 +179,7 @@ class TechnicalIndicators {
     }
 
     static adx(highs, lows, closes, len) {
-        if (closes.length < len * 2) return { adx: 0, pdi: 0, mdi: 0 };
+        if (closes.length < len * 2) return { adx: null, pdi: null, mdi: null };
         let tr = [], pdm = [], mdm = [];
 
         const smooth = (src) => {
@@ -226,7 +229,7 @@ class TechnicalIndicators {
     }
 
     static ao(highs, lows) {
-        if (highs.length < 34) return 0;
+        if (highs.length < 34) return null;
         const mp = highs.map((h, i) => (h + lows[i]) / 2);
         const sma5 = this.sma(mp, 5);
         const sma34 = this.sma(mp, 34);
@@ -234,11 +237,12 @@ class TechnicalIndicators {
     }
 
     static mom(closes, len) {
-        if (closes.length < len) return 0;
+        if (closes.length < len) return null;
         return closes[closes.length - 1] - closes[closes.length - 1 - len];
     }
 
     static macd(closes, fast, slow, sig) {
+        if (closes.length < slow + sig) return { macd: null, signal: null, hist: null };
         const ema = (data, p) => {
             const k = 2 / (p + 1);
             let e = data[0];
@@ -259,6 +263,7 @@ class TechnicalIndicators {
     }
 
     static stochRsi(closes, len, stochLen, k, d) {
+        if (closes.length < len + stochLen) return { k: null };
         const start = Math.max(0, closes.length - 200);
         const subset = closes.slice(start);
         const rsis = [];
@@ -302,7 +307,7 @@ class TechnicalIndicators {
     }
 
     static wpr(highs, lows, closes, len) {
-        if (closes.length < len) return -50;
+        if (closes.length < len) return null;
         const idx = closes.length - 1;
         const h = Math.max(...highs.slice(idx - len + 1, idx + 1));
         const l = Math.min(...lows.slice(idx - len + 1, idx + 1));
@@ -310,12 +315,14 @@ class TechnicalIndicators {
     }
 
     static bbp(highs, lows, closes, len) {
+        if (closes.length < len) return null;
         const ema = this.ema(closes, len);
         const idx = closes.length - 1;
         return highs[idx] - ema + (lows[idx] - ema);
     }
 
     static uo(highs, lows, closes, p1, p2, p3) {
+        if (closes.length < p3) return null;
         const start = Math.max(1, closes.length - p3 - 50);
         let bps = [], trs = [];
         for(let i=start; i<closes.length; i++) {
