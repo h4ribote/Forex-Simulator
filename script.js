@@ -2,8 +2,11 @@
  * Core Application Logic
  */
 const App = {
-    data: [], // Full CSV data
-    currentIndex: 0, // Current simulation cursor
+    rawData: [], // Original 1-minute data
+    data: [], // Aggregated data for display
+    timeframe: 1, // Current timeframe in minutes
+    currentRawIndex: 0, // Current simulation cursor (index in rawData)
+    currentIndex: 0, // Current display cursor (index in data)
 
     // Trading State
     balance: 1000000,
@@ -16,28 +19,25 @@ const App = {
     timer: null,
 
     // Chart Config
-    visibleCandles: 60,
-    candleWidth: 0,
-    canvas: null,
-    ctx: null,
-    height: 0,
-    width: 0,
+    chart: null,
+    candleSeries: null,
 
     elements: {},
+
+    // Analysis State
+    isAnalysisOpen: false,
 
     init() {
         this.cacheElements();
         this.setupEventListeners();
-        this.resizeCanvas();
-        window.addEventListener('resize', () => this.resizeCanvas());
-        this.renderLoop(); // Start render loop
+        this.initChart();
+        this.renderLoop(); // Start render loop (mostly for UI updates if needed)
     },
 
     cacheElements() {
         this.elements = {
             fileInput: document.getElementById('fileInput'),
             loader: document.getElementById('loader'),
-            canvas: document.getElementById('mainCanvas'),
             chartContainer: document.getElementById('chartContainer'),
             balance: document.getElementById('balanceDisplay'),
             equity: document.getElementById('equityDisplay'),
@@ -51,12 +51,56 @@ const App = {
             btnSell: document.getElementById('btnSell'),
             btnPlay: document.getElementById('btnPlayPause'),
             btnStep: document.getElementById('btnStep'),
+            timeframeSelect: document.getElementById('timeframeSelect'),
             speedSelect: document.getElementById('speedSelect'),
             lotInput: document.getElementById('lotSize'),
-            btnReset: document.getElementById('btnReset')
+            btnReset: document.getElementById('btnReset'),
+            btnAnalysis: document.getElementById('btnAnalysis'),
+            analysisModal: document.getElementById('analysisModal'),
+            btnCloseAnalysis: document.getElementById('btnCloseAnalysis'),
+            analysisContent: document.getElementById('analysisContent')
         };
-        this.canvas = this.elements.canvas;
-        this.ctx = this.canvas.getContext('2d');
+    },
+
+    initChart() {
+        const chartOptions = {
+            layout: {
+                background: { type: 'solid', color: '#1e293b' },
+                textColor: '#94a3b8',
+            },
+            grid: {
+                vertLines: { color: '#334155' },
+                horzLines: { color: '#334155' },
+            },
+            timeScale: {
+                borderColor: '#475569',
+                timeVisible: true,
+                secondsVisible: false,
+            },
+            rightPriceScale: {
+                borderColor: '#475569',
+            },
+            width: this.elements.chartContainer.clientWidth,
+            height: this.elements.chartContainer.clientHeight,
+        };
+
+        this.chart = LightweightCharts.createChart(this.elements.chartContainer, chartOptions);
+
+        this.candleSeries = this.chart.addSeries(LightweightCharts.CandlestickSeries, {
+            upColor: '#22c55e',
+            downColor: '#ef4444',
+            borderVisible: false,
+            wickUpColor: '#22c55e',
+            wickDownColor: '#ef4444',
+        });
+
+        // Handle Resize
+        const resizeObserver = new ResizeObserver(entries => {
+            if (entries.length === 0 || entries[0].target !== this.elements.chartContainer) return;
+            const newRect = entries[0].contentRect;
+            this.chart.applyOptions({ width: newRect.width, height: newRect.height });
+        });
+        resizeObserver.observe(this.elements.chartContainer);
     },
 
     setupEventListeners() {
@@ -76,6 +120,11 @@ const App = {
             }
         });
 
+        this.elements.timeframeSelect.addEventListener('change', (e) => {
+            const newTimeframe = parseInt(e.target.value);
+            this.setTimeframe(newTimeframe);
+        });
+
         this.elements.btnBuy.addEventListener('click', () => this.openPosition('BUY'));
         this.elements.btnSell.addEventListener('click', () => this.openPosition('SELL'));
 
@@ -85,48 +134,103 @@ const App = {
             }
         });
 
-        // Simple touch/drag for chart scrolling (optional basic implementation)
-        let isDragging = false;
-        let lastX = 0;
-
-        this.elements.chartContainer.addEventListener('mousedown', e => {
-            isDragging = true;
-            lastX = e.clientX;
-        });
-        window.addEventListener('mouseup', () => isDragging = false);
-        this.elements.chartContainer.addEventListener('mousemove', e => {
-            if (!isDragging || !this.data.length) return;
-            const dx = e.clientX - lastX;
-            if (Math.abs(dx) > 5) {
-                // Determine direction
-                // For simplicity in this version, dragging logic is minimal
-                // Ideally, modify a 'scrollOffset' variable
-                lastX = e.clientX;
-            }
-        });
+        this.elements.btnAnalysis.addEventListener('click', () => this.toggleAnalysis());
+        this.elements.btnCloseAnalysis.addEventListener('click', () => this.toggleAnalysis());
     },
 
-    resizeCanvas() {
-        const rect = this.elements.chartContainer.getBoundingClientRect();
-        this.width = rect.width;
-        this.height = rect.height;
+    toggleAnalysis() {
+        this.isAnalysisOpen = !this.isAnalysisOpen;
+        if (this.isAnalysisOpen) {
+            this.elements.analysisModal.classList.remove('hidden');
+            this.renderAnalysis();
+        } else {
+            this.elements.analysisModal.classList.add('hidden');
+        }
+    },
 
-        // Handle High DPI
-        const dpr = window.devicePixelRatio || 1;
-        this.canvas.width = this.width * dpr;
-        this.canvas.height = this.height * dpr;
-        this.ctx.scale(dpr, dpr);
+    renderAnalysis() {
+        if (!this.isAnalysisOpen || !this.data.length) return;
 
-        this.renderChart();
+        const analysis = TechnicalIndicators.analyze(this.data);
+        if (!analysis) return;
+
+        const getSignalColor = (action) => action === 'BUY' ? 'text-blue-400' : action === 'SELL' ? 'text-red-400' : 'text-slate-400';
+        const getSignalText = (action) => action === 'BUY' ? '買い' : action === 'SELL' ? '売り' : action === null ? '-' : '中立';
+
+        // Helper for gauge (simplified)
+        const renderGauge = (title, data) => {
+            let buy = 0, sell = 0, neutral = 0;
+            data.forEach(d => {
+                if (d.action === 'BUY') buy++;
+                else if (d.action === 'SELL') sell++;
+                else if (d.action === 'NEUTRAL') neutral++;
+            });
+
+            // Gauge CSS Logic (basic)
+            const total = buy + sell + neutral;
+            const score = total > 0 ? (buy - sell) / total : 0; // -1 to 1
+            const deg = (score + 1) * 90; // 0 to 180
+
+            return `
+                <div class="bg-black/20 p-4 rounded text-center">
+                    <h3 class="text-sm text-slate-300 mb-2">${title}</h3>
+                    <div class="relative w-40 h-20 mx-auto overflow-hidden">
+                        <div class="absolute w-40 h-40 rounded-full border-8 border-slate-700 top-0 left-0"></div>
+                        <div class="absolute w-40 h-40 rounded-full border-8 border-transparent border-t-blue-500 top-0 left-0" style="transform: rotate(${score * 45}deg);"></div>
+                        <div class="absolute bottom-0 left-1/2 w-1 h-20 bg-white origin-bottom transform -translate-x-1/2 rotate-[${score * 90}deg] transition-transform"></div>
+                    </div>
+                    <div class="flex justify-around mt-2 text-xs font-mono">
+                        <div class="text-red-400">売り<br><span class="text-lg">${sell}</span></div>
+                        <div class="text-slate-400">中立<br><span class="text-lg">${neutral}</span></div>
+                        <div class="text-blue-400">買い<br><span class="text-lg">${buy}</span></div>
+                    </div>
+                </div>
+            `;
+        };
+
+        const renderTable = (items) => {
+            return items.map(item => `
+                <div class="flex justify-between py-2 border-b border-slate-700 text-sm">
+                    <span class="text-slate-300">${item.name}</span>
+                    <div class="text-right">
+                        <span class="font-mono mr-2">${item.value !== null ? item.value.toFixed(2) : '-'}</span>
+                        <span class="${getSignalColor(item.action)} font-bold w-10 inline-block text-center">${getSignalText(item.action)}</span>
+                    </div>
+                </div>
+            `).join('');
+        };
+
+        const html = `
+            <div class="grid grid-cols-2 gap-4 mb-6">
+                ${renderGauge('オシレーター', analysis.oscillators)}
+                ${renderGauge('移動平均', analysis.movingAverages)}
+            </div>
+
+            <div class="space-y-6">
+                <div>
+                    <h3 class="text-sm font-bold text-slate-300 mb-2 border-b border-slate-600 pb-1">オシレーター</h3>
+                    <div class="space-y-1">
+                        ${renderTable(analysis.oscillators)}
+                    </div>
+                </div>
+                <div>
+                    <h3 class="text-sm font-bold text-slate-300 mb-2 border-b border-slate-600 pb-1">移動平均</h3>
+                    <div class="space-y-1">
+                        ${renderTable(analysis.movingAverages)}
+                    </div>
+                </div>
+            </div>
+        `;
+
+        this.elements.analysisContent.innerHTML = html;
     },
 
     resetSim() {
         this.pause();
-        this.currentIndex = 0;
+        this.currentRawIndex = Math.min(60, this.rawData.length - 1);
         this.balance = 1000000;
         this.positions = [];
-        this.updateUI();
-        this.renderChart();
+        this.setTimeframe(this.timeframe);
     },
 
     handleFileUpload(event) {
@@ -175,7 +279,7 @@ const App = {
 
             newData.push({
                 time: ts,
-                timeStr: timeStr.substring(0, 16), // Show up to minutes
+                // timeStr will be generated on demand or pre-calc if needed
                 open: parseFloat(cols[1]),
                 high: parseFloat(cols[2]),
                 low: parseFloat(cols[3]),
@@ -183,8 +287,9 @@ const App = {
             });
         }
 
-        this.data = newData;
-        this.currentIndex = Math.min(60, this.data.length - 1); // Start with some history
+        this.rawData = newData;
+        // Start with some history
+        this.currentRawIndex = Math.min(60, this.rawData.length - 1);
 
         this.elements.loader.style.display = 'none';
 
@@ -192,11 +297,81 @@ const App = {
         this.elements.btnBuy.classList.remove('btn-disabled');
         this.elements.btnSell.classList.remove('btn-disabled');
 
-        this.renderChart();
-        this.updateUI();
+        // Set initial timeframe
+        this.setTimeframe(this.timeframe, true);
+    },
 
-        // Auto play start
-        // this.play();
+    formatTime(ts) {
+        const d = new Date(ts);
+        const pad = (n) => n.toString().padStart(2, '0');
+        const year = d.getFullYear();
+        const month = pad(d.getMonth() + 1);
+        const day = pad(d.getDate());
+        const hour = pad(d.getHours());
+        const min = pad(d.getMinutes());
+        return `${year}/${month}/${day} ${hour}:${min}`;
+    },
+
+    setTimeframe(minutes, isInit = false) {
+        this.timeframe = minutes;
+        // Rebuild aggregated data from rawData up to currentRawIndex
+        this.data = this.aggregateData(minutes, this.currentRawIndex);
+
+        // Ensure display cursor is at the end
+        this.currentIndex = this.data.length - 1;
+
+        this.updateChartData();
+        this.updateUI();
+    },
+
+    aggregateData(minutes, upToIndex) {
+        if (!this.rawData.length) return [];
+
+        // Limit raw data to upToIndex
+        const sourceData = this.rawData.slice(0, upToIndex + 1);
+
+        if (minutes === 1) {
+            return sourceData.map(c => ({
+                ...c,
+                timeStr: this.formatTime(c.time)
+            }));
+        }
+
+        const aggregated = [];
+        const intervalMs = minutes * 60 * 1000;
+
+        let currentCandle = null;
+        let bucketStartTime = 0;
+
+        for (const candle of sourceData) {
+            const candleTime = candle.time;
+            const alignedTime = Math.floor(candleTime / intervalMs) * intervalMs;
+
+            if (currentCandle && alignedTime !== bucketStartTime) {
+                aggregated.push(currentCandle);
+                currentCandle = null;
+            }
+
+            if (!currentCandle) {
+                bucketStartTime = alignedTime;
+                currentCandle = {
+                    time: bucketStartTime,
+                    timeStr: this.formatTime(bucketStartTime),
+                    open: candle.open,
+                    high: candle.high,
+                    low: candle.low,
+                    close: candle.close,
+                };
+            } else {
+                currentCandle.high = Math.max(currentCandle.high, candle.high);
+                currentCandle.low = Math.min(currentCandle.low, candle.low);
+                currentCandle.close = candle.close;
+            }
+        }
+        if (currentCandle) {
+            aggregated.push(currentCandle);
+        }
+        return aggregated;
     },
 
     // --- Simulation Logic ---
@@ -211,9 +386,15 @@ const App = {
         this.isPlaying = true;
         this.elements.btnPlay.textContent = '⏸';
 
+        const interval = this.speed * this.timeframe; // Adjust timing based on speed
+        // NOTE: If speed is "ms per candle update", we should just use speed directly.
+        // The original code used speed * timeframe which implies higher timeframe = slower updates?
+        // Let's stick to simple speed for now.
+        // Actually, if we want to simulate "1 tick per X ms", we should just call nextCandle.
+
         this.timer = setInterval(() => {
             this.nextCandle();
-        }, this.speed);
+        }, this.speed); // Using raw speed value for interval
     },
 
     pause() {
@@ -223,26 +404,68 @@ const App = {
     },
 
     nextCandle() {
-        if (this.currentIndex >= this.data.length - 1) {
+        if (this.currentRawIndex >= this.rawData.length - 1) {
             this.pause();
             alert("データ終了");
             return;
         }
-        this.currentIndex++;
-        this.renderChart();
+        this.currentRawIndex++;
+
+        // Update aggregated data incrementally
+        const rawCandle = this.rawData[this.currentRawIndex];
+        const intervalMs = this.timeframe * 60 * 1000;
+        const bucketTime = Math.floor(rawCandle.time / intervalMs) * intervalMs;
+
+        // Check if last aggregated candle corresponds to this bucket
+        const lastAgg = this.data.length > 0 ? this.data[this.data.length - 1] : null;
+
+        if (lastAgg && lastAgg.time === bucketTime) {
+            // Update existing candle
+            lastAgg.high = Math.max(lastAgg.high, rawCandle.high);
+            lastAgg.low = Math.min(lastAgg.low, rawCandle.low);
+            lastAgg.close = rawCandle.close;
+        } else {
+            // Start new candle
+            this.data.push({
+                time: bucketTime,
+                timeStr: this.formatTime(bucketTime),
+                open: rawCandle.open,
+                high: rawCandle.high,
+                low: rawCandle.low,
+                close: rawCandle.close
+            });
+        }
+
+        // Ensure chart shows latest
+        this.currentIndex = this.data.length - 1;
+
+        // Update Chart via API
+        const currentCandle = this.data[this.data.length - 1];
+        // Convert to seconds for TradingView
+        const tvCandle = {
+            ...currentCandle,
+            time: currentCandle.time / 1000
+        };
+        this.candleSeries.update(tvCandle);
+
+        // Keep latest in view if playing
+        // this.chart.timeScale().scrollToPosition(0, false); // Optional: keep rightmost visible
+
         this.updateUI();
+        if (this.isAnalysisOpen) this.renderAnalysis();
     },
 
     // --- Trading Logic ---
 
     getCurrentPrice() {
-        if (!this.data.length) return { bid: 0, ask: 0 };
-        const candle = this.data[this.currentIndex];
+        // Price should be based on current RAW candle (most granular)
+        if (!this.rawData.length) return { bid: 0, ask: 0 };
+        const candle = this.rawData[this.currentRawIndex];
         // Bid = Close, Ask = Close + Spread
         return {
             bid: candle.close,
             ask: candle.close + this.spread,
-            time: candle.timeStr
+            time: this.formatTime(candle.time)
         };
     },
 
@@ -362,105 +585,25 @@ const App = {
 
     // --- Chart Rendering ---
 
-    renderChart() {
-        if (!this.data.length || !this.ctx) return;
+    updateChartData() {
+        if (!this.candleSeries) return;
 
-        const ctx = this.ctx;
-        const w = this.width;
-        const h = this.height;
+        // Map data to TradingView format (time in seconds)
+        const tvData = this.data.map(d => ({
+            time: d.time / 1000,
+            open: d.open,
+            high: d.high,
+            low: d.low,
+            close: d.close
+        }));
 
-        // Clear
-        ctx.clearRect(0, 0, w, h);
-
-        // Determine view window
-        const endIndex = this.currentIndex;
-        const startIndex = Math.max(0, endIndex - this.visibleCandles);
-        const viewData = this.data.slice(startIndex, endIndex + 1);
-
-        if (viewData.length === 0) return;
-
-        // Find Y Scale
-        let minPrice = Infinity;
-        let maxPrice = -Infinity;
-        viewData.forEach(d => {
-            if (d.high > maxPrice) maxPrice = d.high;
-            if (d.low < minPrice) minPrice = d.low;
-        });
-
-        // Add padding to Y axis
-        const priceRange = maxPrice - minPrice;
-        minPrice -= priceRange * 0.1;
-        maxPrice += priceRange * 0.1;
-
-        const getY = (price) => h - ((price - minPrice) / (maxPrice - minPrice)) * h;
-
-        // Grid Lines
-        ctx.strokeStyle = '#334155';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-
-        // Draw 5 horizontal grid lines
-        for(let i=1; i<5; i++) {
-            const p = minPrice + (priceRange * 1.2) * (i/5);
-            const y = getY(p);
-            ctx.moveTo(0, y);
-            ctx.lineTo(w, y);
-
-            // Text
-            ctx.fillStyle = '#64748b';
-            ctx.font = '10px sans-serif';
-            ctx.fillText(p.toFixed(2), w - 40, y - 5);
-        }
-        ctx.stroke();
-
-        // Draw Candles
-        const candleW = (w / this.visibleCandles) * 0.8;
-        const spacing = (w / this.visibleCandles) * 0.2;
-
-        viewData.forEach((d, i) => {
-            const x = i * (candleW + spacing) + spacing/2;
-            const openY = getY(d.open);
-            const closeY = getY(d.close);
-            const highY = getY(d.high);
-            const lowY = getY(d.low);
-
-            const isBullish = d.close >= d.open;
-
-            ctx.fillStyle = isBullish ? '#22c55e' : '#ef4444'; // Green : Red
-            ctx.strokeStyle = ctx.fillStyle;
-
-            // Wick
-            ctx.beginPath();
-            ctx.moveTo(x + candleW/2, highY);
-            ctx.lineTo(x + candleW/2, lowY);
-            ctx.stroke();
-
-            // Body
-            // Ensure height is at least 1px
-            let bodyH = Math.abs(closeY - openY);
-            if (bodyH < 1) bodyH = 1;
-
-            const topY = Math.min(openY, closeY);
-            ctx.fillRect(x, topY, candleW, bodyH);
-        });
-
-        // Draw Current Price Line
-        const currentClose = viewData[viewData.length-1].close;
-        const curY = getY(currentClose);
-
-        ctx.beginPath();
-        ctx.strokeStyle = '#ffffff';
-        ctx.setLineDash([5, 5]);
-        ctx.moveTo(0, curY);
-        ctx.lineTo(w, curY);
-        ctx.stroke();
-        ctx.setLineDash([]);
+        this.candleSeries.setData(tvData);
     },
 
     renderLoop() {
-        // Animation loop hook if needed for smoother transitions later
-        // Currently rendering is triggered by state changes
-        requestAnimationFrame(() => this.renderLoop());
+        // Kept if we need independent animation loop,
+        // but mostly event-driven now.
+        // requestAnimationFrame(() => this.renderLoop());
     }
 };
 
